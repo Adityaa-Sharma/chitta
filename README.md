@@ -46,6 +46,9 @@ anyway. No System Settings toggle needed.
 ## Use
 
     chitta ask "..."        # -t reflex|work|heavy
+    chitta feed "..."       # remember something (extracts claims locally)
+    chitta recall [query]   # what it believes now  (--history for the rest)
+    chitta contradictions   # where your beliefs changed
     chitta status           # what is resident right now
     chitta models           # what is on disk
     chitta unload --all     # back to zero
@@ -55,6 +58,29 @@ anyway. No System Settings toggle needed.
 The core is stdlib-only. Importing httpx costs ~100ms of startup, and this is
 a CLI you run fifty times a day.
 
+## smriti
+
+A bitemporal claim store in stdlib sqlite. Two clocks:
+
+    valid_from / valid_to   when a thing was true of the world
+    observed_at             when chitta was told
+
+Writing a claim supersedes any open claim with the same subject+predicate.
+Nothing is deleted — the old row gets a `valid_to` and points at its successor.
+That closed row *is* the contradiction, so there is no detection pass:
+
+    $ chitta feed "I prefer minimal dependencies over frameworks."
+    $ chitta feed "Changed my mind, I prefer proven frameworks now."
+
+    $ chitta contradictions
+      aditya · prefers
+        was  minimal dependencies over convenient frameworks
+        now  proven frameworks
+
+Extraction runs on the local work tier, constrained to a JSON schema, so it
+cannot come back as prose. No graph database: recursive CTEs cover multi-hop
+and stdlib costs nothing at idle. Kuzu if traversal depth ever bites.
+
 ## Not built yet
 
 Named for what each will do, per the Mahabharata:
@@ -62,7 +88,6 @@ Named for what each will do, per the Mahabharata:
 - **shruti** — voice in (Wispr Flow)
 - **sanjaya** — ingestion: Claude Code sessions, Gmail, Calendar, Notion
 - **vyasa** — nightly consolidation: raw day to entities and claims
-- **smriti** — the temporal knowledge graph (Graphiti + Kuzu, embedded, zero idle RAM)
 - **narada** — the daemon that decides when to interrupt you. Budget: 3 a day.
 - **vidura** — counsel. Tells you what you do not want to hear.
 - **kriya** — hands. Executes tasks on the machine, behind an allowlist.

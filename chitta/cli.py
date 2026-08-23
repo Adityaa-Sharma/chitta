@@ -6,7 +6,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from . import __version__, ollama
+from . import __version__, ollama, smriti
 from .config import DEFAULT_TIER, EMBED, TIERS, UI_PORT
 
 PERSONA = (
@@ -70,7 +70,13 @@ def cmd_status(args):
         print(f"    {mark} {name:<8} {t['model']:<18} keep_alive={t['keep_alive']:<5} {t['role'][:44]}")
     mark = "*" if EMBED["model"] in on_disk else "-"
     print(f"    {mark} {'embed':<8} {EMBED['model']:<18}")
-    print("\n  (* on disk, - not pulled)\n")
+    print("\n  (* on disk, - not pulled)")
+    try:
+        st = smriti.stats(smriti.connect())
+        print(f"\n  smriti   {st['claims_live']} live claims · {st['subjects']} subjects "
+              f"· {st['superseded']} superseded · {st['episodes']} episodes\n")
+    except Exception as e:
+        print(f"\n  smriti   unavailable ({e})\n")
 
 
 def cmd_models(args):
@@ -116,6 +122,52 @@ def cmd_ui(args):
             srv.serve_forever()
         except KeyboardInterrupt:
             print()
+
+
+def cmd_feed(args):
+    need_server()
+    text = " ".join(args.text) if args.text else sys.stdin.read()
+    text = text.strip()
+    if not text:
+        sys.exit("chitta: nothing to feed")
+    con = smriti.connect()
+    print(f"reading {len(text)} chars via {args.tier}…")
+    ep, added, superseded = smriti.feed(con, text, source=args.source,
+                                        ref=args.ref, tier=args.tier)
+    if not added:
+        print("nothing durable in that. episode kept anyway.")
+    for cid, c in added:
+        print(f"  + {c['subject']} · {c['predicate']} · {c['object']}")
+    if superseded:
+        print(f"\n  {len(superseded)} earlier belief(s) superseded — "
+              f"see: chitta contradictions")
+
+
+def cmd_recall(args):
+    con = smriti.connect()
+    rows = smriti.recall(con, args.query, include_history=args.history)
+    if not rows:
+        print("nothing remembered yet" if not args.query else "no match")
+        return
+    print()
+    for r in rows:
+        dead = "" if r["valid_to"] is None else f"  (until {r['valid_to'][:10]})"
+        print(f"  {r['subject']} · {r['predicate']} · {r['object']}"
+              f"{dead}\n    {r['observed_at'][:10]}  conf={r['confidence']:.2f}")
+    print()
+
+
+def cmd_contradictions(args):
+    con = smriti.connect()
+    rows = smriti.contradictions(con)
+    if not rows:
+        print("no beliefs have changed yet")
+        return
+    print()
+    for r in rows:
+        print(f"  {r['subject']} · {r['predicate']}")
+        print(f"    was  {r['was']}   (held from {r['held_from'][:10]})")
+        print(f"    now  {r['now_is']}   (changed {r['changed_at'][:10]})\n")
 
 
 def cmd_doctor(args):
@@ -173,6 +225,21 @@ def main():
 
     ui = sub.add_parser("ui", help="open the dashboard")
     ui.set_defaults(fn=cmd_ui)
+
+    f = sub.add_parser("feed", help="give it something to remember")
+    f.add_argument("text", nargs="*", help="text, or omit to read stdin")
+    f.add_argument("--source", default="note")
+    f.add_argument("--ref")
+    f.add_argument("-t", "--tier", choices=list(TIERS), default="work")
+    f.set_defaults(fn=cmd_feed)
+
+    r = sub.add_parser("recall", help="what it remembers")
+    r.add_argument("query", nargs="?")
+    r.add_argument("--history", action="store_true", help="include superseded beliefs")
+    r.set_defaults(fn=cmd_recall)
+
+    x = sub.add_parser("contradictions", help="where your beliefs changed")
+    x.set_defaults(fn=cmd_contradictions)
 
     d = sub.add_parser("doctor", help="check the RAM-critical settings")
     d.set_defaults(fn=cmd_doctor)

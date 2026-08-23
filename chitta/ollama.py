@@ -44,9 +44,12 @@ def ps():
     return _json("/api/ps", timeout=30).get("models", [])
 
 
-def chat(model, messages, keep_alive=None, num_ctx=None, think=False, stream=True):
+def chat(model, messages, keep_alive=None, num_ctx=None, think=False,
+         stream=True, format=None):
     """Yields content chunks."""
     payload = {"model": model, "messages": messages, "stream": stream, "think": think}
+    if format is not None:
+        payload["format"] = format
     if keep_alive is not None:
         payload["keep_alive"] = keep_alive
     if num_ctx:
@@ -75,3 +78,15 @@ def unload(model):
 
 def delete(model):
     return _json("/api/delete", {"model": model}, method="DELETE", timeout=60)
+
+
+def chat_json(model, messages, schema, keep_alive=None, num_ctx=None):
+    """Constrained decode against a JSON schema. Ollama enforces the grammar,
+    so this cannot come back as prose with a code fence around it."""
+    txt = "".join(chat(model, messages, keep_alive=keep_alive, num_ctx=num_ctx,
+                       stream=False, format=schema))
+    return json.loads(txt)
+
+
+def embed(model, texts):
+    return _json("/api/embed", {"model": model, "input": texts}, timeout=120)["embeddings"]
