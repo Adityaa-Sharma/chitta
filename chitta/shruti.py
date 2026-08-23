@@ -15,8 +15,10 @@ actually not good enough to listen to - and listen first before deciding.
 import shutil
 import subprocess
 
-VOICE = "Aman"   # en_IN, ships with macOS
-RATE = 185       # words/min; the 175 default reads a shade slow
+from .config import CONFIG
+
+VOICE = CONFIG["voice"]["voice"]
+RATE = CONFIG["voice"]["rate"]
 
 
 def available():
@@ -25,7 +27,7 @@ def available():
 
 def speak(text, voice=VOICE, rate=RATE, block=True):
     """Say it. Returns False if `say` is missing rather than raising."""
-    if not available():
+    if not (available() and CONFIG["voice"]["enabled"]):
         return False
     text = " ".join(str(text).split())
     if not text:

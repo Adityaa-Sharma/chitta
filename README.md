@@ -100,6 +100,44 @@ fix was not a curve: the first version rewrote `innerHTML` every 2.5s, which
 destroyed every node and flickered. `sync()` now reconciles by key, so nodes
 persist and only text and classes change. `tests/sync.test.mjs` covers it.
 
+## Configuration
+
+Everything is a knob. Defaults live in `chitta/config.py`; a TOML file at
+`~/.chitta/config.toml` is deep-merged over them, so you write only what you
+change and nothing breaks when new keys appear.
+
+    chitta config          # effective config, and where it came from
+    chitta config --init   # write a full file, every default spelled out
+    chitta config --path
+
+Models, keep_alive, context sizes, the extraction prompt, the persona, claim
+length caps, cardinality default, poll intervals, RAM budget, voice and rate,
+ingest filters, the daemon's interruption budget and quiet hours — all of it.
+The dashboard reads tiers and budget from `/api/config` rather than keeping a
+second copy that drifts.
+
+## Memory in answers
+
+`chitta ask` loads the live graph into its system prompt, so it answers as
+something that knows you:
+
+    $ chitta ask "what am I building, and what is my first principle?"
+    You are building an AI-native system inspired by Indian mythology... your
+    first principle is that the system must be optimized, minimal in resource
+    use, and designed to come to you.
+
+Not retrieval — the whole live graph. A few hundred claims is under a thousand
+tokens, and perfect recall beats a similarity heuristic that silently drops the
+one fact that mattered. `--no-memory` to answer without it.
+
+## Voice
+
+In: nothing to integrate. Wispr Flow types into the focused field, so
+`chitta listen` (stdin) and the dashboard textarea both accept dictation.
+
+Out: macOS `say` in the terminal, the browser's own `speechSynthesis` in the
+dashboard. Both native, both zero dependencies. No TTS model.
+
 ## Not built yet
 
 Named for what each will do, per the Mahabharata:

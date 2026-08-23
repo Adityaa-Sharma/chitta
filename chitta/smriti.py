@@ -23,7 +23,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from . import ollama
-from .config import DATA, TIERS
+from .config import CONFIG, DATA, TIERS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS episode(
@@ -72,26 +72,7 @@ EXTRACT_SCHEMA = {
     "required": ["claims"],
 }
 
-EXTRACT_PROMPT = """Extract durable claims from the text. A claim is
-(subject, predicate, object) - e.g. ("aditya", "is building", "chitta").
-
-One atomic fact per claim. Object under 15 words. Split anything compound
-into separate claims - never pack a whole paragraph into one object.
-
-Keep: goals, commitments, beliefs, preferences, relationships, decisions,
-things that are true for weeks not minutes.
-Drop: pleasantries, one-off events, anything you would not want repeated
-back in six months.
-
-subject and predicate lowercase. Use "aditya" for first person.
-
-cardinality is the important one. "one" means the subject can hold only a
-single value for this predicate at a time, so a new value replaces the old:
-lives in, works at, is married to, currently prefers. "many" means several
-can be true at once: wants, has, knows, is building, is interested in.
-When unsure say "many" - it keeps the old fact instead of destroying it.
-
-Return {"claims": []} rather than inventing anything. Be sparing."""
+EXTRACT_PROMPT = CONFIG["extract"]["prompt"]
 
 
 def now():
@@ -120,8 +101,8 @@ def add_episode(con, source, text, ref=None, ts=None):
     return cur.lastrowid if cur.rowcount else None
 
 
-def add_claim(con, subject, predicate, obj, episode_id=None, confidence=0.5,
-              valid_from=None, observed_at=None, cardinality="many"):
+def add_claim(con, subject, predicate, obj, episode_id=None, confidence=None,
+              valid_from=None, observed_at=None, cardinality=None):
     """Insert, superseding the prior value only if the predicate holds one.
 
     Cardinality matters more than it looks. "aditya prefers X" is single
@@ -133,6 +114,9 @@ def add_claim(con, subject, predicate, obj, episode_id=None, confidence=0.5,
 
     Returns (claim_id, superseded_id_or_None).
     """
+    x = CONFIG["extract"]
+    confidence = x["default_confidence"] if confidence is None else confidence
+    cardinality = cardinality or x["default_cardinality"]
     s, p = subject.strip().lower(), predicate.strip().lower()
     o = obj.strip()
     t = observed_at or now()
@@ -161,9 +145,6 @@ def add_claim(con, subject, predicate, obj, episode_id=None, confidence=0.5,
     return new_id, (prior["id"] if prior else None)
 
 
-MAX_OBJECT = 200
-
-
 def _clean(claims):
     """Drop malformed extractions.
 
@@ -175,6 +156,7 @@ def _clean(claims):
     Dropping is safe: the episode keeps the raw text, so a better prompt can
     re-derive the claim later. Claims are derived data, episodes are source.
     """
+    x = CONFIG["extract"]
     out, seen = [], set()
     for c in claims:
         if not isinstance(c, dict):
@@ -184,7 +166,8 @@ def _clean(claims):
         o = str(c.get("object", "")).strip()
         if not (s and p and o):
             continue
-        if len(o) > MAX_OBJECT or len(p) > 60 or len(s) > 60:
+        if (len(o) > x["max_object_chars"] or len(p) > x["max_predicate_chars"]
+                or len(s) > x["max_subject_chars"]):
             continue          # a paragraph, not a claim - failed extraction
         if "'}," in o or '"},' in o:
             continue          # decoder spillage
@@ -197,26 +180,26 @@ def _clean(claims):
     return out
 
 
-def extract(text, tier="work"):
-    t = TIERS[tier]
+def extract(text, tier=None):
+    t = TIERS[tier or CONFIG["extract"]["tier"]]
     out = ollama.chat_json(
         t["model"],
         [{"role": "system", "content": EXTRACT_PROMPT},
-         {"role": "user", "content": text}],
+         {"role": "user", "content": text[:CONFIG["extract"]["max_input_chars"]]}],
         EXTRACT_SCHEMA, keep_alive=t["keep_alive"], num_ctx=t["num_ctx"],
     )
     return _clean(out.get("claims", []))
 
 
-def feed(con, text, source="note", ref=None, tier="work"):
+def feed(con, text, source="note", ref=None, tier=None):
     ep = add_episode(con, source, text, ref)
     added, superseded = [], []
     for c in extract(text, tier):
         if not (c.get("subject") and c.get("predicate") and c.get("object")):
             continue
         cid, old = add_claim(con, c["subject"], c["predicate"], c["object"],
-                             episode_id=ep, confidence=c.get("confidence", 0.5),
-                             cardinality=c.get("cardinality", "many"))
+                             episode_id=ep, confidence=c.get("confidence"),
+                             cardinality=c.get("cardinality"))
         added.append((cid, c))
         if old:
             superseded.append(old)
@@ -237,6 +220,21 @@ def recall(con, query=None, include_history=False, limit=50):
     return con.execute(sql, (*args, limit)).fetchall()
 
 
+def context(con, query=None, limit=None):
+    """The live graph, rendered for a system prompt.
+
+    Everything, not a retrieved subset: a few hundred claims is well under a
+    thousand tokens, and perfect recall beats a similarity heuristic that
+    silently drops the one fact that mattered.
+    """
+    a = CONFIG["ask"]
+    rows = recall(con, query, limit=limit or a["max_claims"])
+    if not rows:
+        return ""
+    lines = "\n".join(f"- {r['subject']} {r['predicate']} {r['object']}" for r in rows)
+    return f"{a['preamble']}\n{lines}\n\n{a['instruction']}"
+
+
 def contradictions(con, limit=50):
     """Every place a belief was replaced. old -> new, with both timestamps."""
     return con.execute(
@@ -246,13 +244,14 @@ def contradictions(con, limit=50):
         "ORDER BY o.valid_to DESC LIMIT ?", (limit,)).fetchall()
 
 
-def graph(con, limit=250):
+def graph(con, limit=None):
     """Nodes and edges for the viewer.
 
     Subjects and objects are both nodes; a claim is an edge. Superseded
     claims are included but flagged, because seeing what a belief replaced
     is the whole reason the history is kept.
     """
+    limit = limit or CONFIG["ui"]["graph_max_claims"]
     rows = con.execute(
         "SELECT subject, predicate, object, valid_to, cardinality, confidence "
         "FROM claim ORDER BY observed_at DESC LIMIT ?", (limit,)).fetchall()

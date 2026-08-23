@@ -122,10 +122,12 @@ pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;max-height:280px;
     <div class="label">test</div>
     <div class="tier" id="tiers"></div>
     <textarea id="q" rows="3" spellcheck="false"
-  placeholder="ask something…  (enter sends · shift+enter newline · esc stops)"></textarea>
+  placeholder="ask something, or dictate with Wispr Flow…  (enter sends · shift+enter newline · esc stops)"></textarea>
     <div style="display:flex;gap:8px;margin-top:8px">
       <button id="askBtn">ask</button>
       <button id="stopBtn" disabled>stop</button>
+      <button id="speakBtn" title="read answers aloud">speak: off</button>
+      <button id="memBtn" title="answer using smriti">memory: on</button>
       <span class="dim" id="timing" style="align-self:center"></span>
     </div>
     <pre id="out"></pre>
@@ -152,13 +154,9 @@ pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;max-height:280px;
 
 <script>
 const API = "http://127.0.0.1:11434";
-const BUDGET = 6 * 1024 ** 3;
-const TIERS = {
-  reflex: {model:"qwen3:1.7b",  keep_alive:"30m", num_ctx:4096},
-  work:   {model:"qwen3:8b",    keep_alive:"5m",  num_ctx:8192},
-  heavy:  {model:"gpt-oss:20b", keep_alive:"60s", num_ctx:8192},
-};
-let tier = "work", ctrl = null;
+/* tiers and budget come from /api/config — a second copy here drifts out of
+   sync with config.toml the first time anything is tuned. */
+let TIERS = {}, BUDGET = 6 * 1024 ** 3, tier = null, ctrl = null, MEMORY = "";
 
 const $ = s => document.querySelector(s);
 const human = n => { n = +n||0; for (const u of ["B","KB","MB","GB"]) {
@@ -302,11 +300,26 @@ $("#pullBtn").onclick = async () => {
   $("#pullBtn").disabled = false;
 };
 
+function renderTiers(){
 $("#tiers").innerHTML = Object.entries(TIERS).map(([k,v])=>
   `<button data-t="${k}" class="${k===tier?"sel":""}">${k} <span class="dim">${v.model}</span></button>`).join("");
+}
 $("#tiers").onclick = e => { const b = e.target.closest("button"); if(!b) return;
   tier = b.dataset.t;
   [...$("#tiers").children].forEach(x=>x.classList.toggle("sel", x.dataset.t===tier)); };
+
+async function loadConfig(){
+  try{
+    const c = await (await fetch("/api/config")).json();
+    TIERS = c.tiers; BUDGET = (c.ui.ram_budget_gb || 6) * 1024 ** 3;
+    tier = tier || Object.keys(TIERS)[1] || Object.keys(TIERS)[0];
+    renderTiers();
+  }catch(e){ console.warn("config unavailable", e); }
+}
+async function loadMemory(){
+  try{ MEMORY = (await (await fetch("/api/context")).json()).context || ""; }
+  catch(e){ MEMORY = ""; }
+}
 
 $("#askBtn").onclick = async () => {
   const q = $("#q").value.trim(); if(!q) return;
@@ -320,7 +333,9 @@ $("#askBtn").onclick = async () => {
   try{
     const r = await api("/api/chat",{method:"POST",signal:ctrl.signal,body:JSON.stringify({
       model:t.model, keep_alive:t.keep_alive, options:{num_ctx:t.num_ctx},
-      think:false, stream:true, messages:[{role:"user",content:q}]})});
+      think:false, stream:true,
+      messages: (USEMEM && MEMORY ? [{role:"system",content:MEMORY}] : [])
+                .concat([{role:"user",content:q}])})});
     const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "";
     for(;;){ const {done,value} = await rd.read(); if(done) break;
       buf += dec.decode(value,{stream:true});
@@ -335,10 +350,34 @@ $("#askBtn").onclick = async () => {
       `${first!==null?(first/1000).toFixed(2):"?"}s to first · ${(n/el).toFixed(1)} chunk/s`;
   }catch(e){ if(e.name!=="AbortError") out.innerHTML = `<span class="err">${e}</span>`; }
   out.classList.remove("dim");
+  say(out.textContent);
   $("#askBtn").disabled = false; $("#stopBtn").disabled = true; ctrl = null;
   $("#q").focus(); refresh();
 };
 $("#stopBtn").onclick = () => ctrl && ctrl.abort();
+
+/* Voice out uses the browser's own speechSynthesis — native, zero deps, and
+   it works without a round trip to the server. Voice IN needs nothing at all:
+   Wispr Flow types into the focused field, and the textarea is focused. */
+let SPEAK = false, USEMEM = true;
+$("#speakBtn").onclick = () => { SPEAK = !SPEAK;
+  $("#speakBtn").textContent = "speak: " + (SPEAK ? "on" : "off");
+  $("#speakBtn").classList.toggle("sel", SPEAK);
+  if(!SPEAK) speechSynthesis.cancel(); };
+$("#memBtn").onclick = () => { USEMEM = !USEMEM;
+  $("#memBtn").textContent = "memory: " + (USEMEM ? "on" : "off");
+  $("#memBtn").classList.toggle("sel", USEMEM); };
+$("#memBtn").classList.add("sel");
+
+function say(text){
+  if(!SPEAK || !text.trim() || !window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  const v = speechSynthesis.getVoices();
+  u.voice = v.find(x=>/Aman|Rishi|Tara/.test(x.name)) || v.find(x=>x.lang==="en-IN") || null;
+  u.rate = 1.05;
+  speechSynthesis.speak(u);
+}
 
 /* Enter sends; shift+enter is a newline. Having to reach for the mouse to
    send a chat message is the kind of thing you notice fifty times an hour. */
@@ -482,7 +521,8 @@ async function refreshGraph(){
 }
 refreshGraph(); setInterval(refreshGraph, 8000);
 
-refresh(); refreshSmriti();
+loadConfig().then(refresh); loadMemory(); refreshSmriti();
+setInterval(loadMemory, 15000);
 setInterval(refresh, 2500);
 setInterval(refreshSmriti, 5000);
 </script>

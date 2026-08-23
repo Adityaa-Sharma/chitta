@@ -7,15 +7,9 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__, ollama, sanjaya, shruti, smriti
-from .config import DEFAULT_TIER, EMBED, TIERS, UI_PORT
+from .config import CONFIG, CONFIG_PATH, DEFAULT_TIER, DEFAULTS, EMBED, TIERS, UI_PORT
 
-PERSONA = (
-    "You are Chitta. In Samkhya and the Yoga Sutras, chitta is the mind-substrate "
-    "where impressions settle. You are that, for one person.\n"
-    "Be direct and concrete. Prefer one good sentence to five hedging ones. "
-    "You are allowed to be philosophical, but only when it earns its place - "
-    "never as decoration on an ordinary answer."
-)
+PERSONA = CONFIG["persona"]["prompt"]
 
 
 def human(n):
@@ -36,7 +30,12 @@ def need_server():
 def cmd_ask(args):
     need_server()
     tier = TIERS[args.tier]
-    msgs = [{"role": "system", "content": PERSONA},
+    system = PERSONA
+    if CONFIG["ask"]["use_memory"] and not args.no_memory:
+        mem = smriti.context(smriti.connect())
+        if mem:
+            system += "\n\n" + mem
+    msgs = [{"role": "system", "content": system},
             {"role": "user", "content": " ".join(args.prompt)}]
     buf = []
     try:
@@ -123,12 +122,19 @@ def cmd_ui(args):
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
             route = self.path.split("?")[0]
-            if route not in ("/api/smriti", "/api/graph"):
+            if route not in ("/api/smriti", "/api/graph", "/api/config", "/api/context"):
                 return super().do_GET()
             try:
                 con = smriti.connect()
                 if route == "/api/graph":
                     body = _json.dumps(smriti.graph(con)).encode()
+                elif route == "/api/config":
+                    # the dashboard reads tiers/budget from here rather than
+                    # keeping a second copy that drifts out of sync
+                    body = _json.dumps({"tiers": CONFIG["tiers"], "ui": CONFIG["ui"],
+                                        "persona": CONFIG["persona"]["prompt"]}).encode()
+                elif route == "/api/context":
+                    body = _json.dumps({"context": smriti.context(con)}).encode()
                 else:
                     body = _json.dumps({
                         "stats": smriti.stats(con),
@@ -267,6 +273,53 @@ def cmd_say(args):
         sys.exit("chitta: `say` unavailable")
 
 
+def _toml(v, indent=0):
+    pad = "  " * indent
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml(x) for x in v) + "]"
+    sv = str(v)
+    return '"""\n' + sv + '"""' if "\n" in sv else '"' + sv.replace('"', '\\"') + '"'
+
+
+def _emit(d, prefix=""):
+    out, tables = [], []
+    for k, v in d.items():
+        if isinstance(v, dict):
+            tables.append((k, v))
+        else:
+            out.append(f"{k} = {_toml(v)}")
+    for k, v in tables:
+        name = f"{prefix}{k}"
+        out.append(f"\n[{name}]")
+        out.extend(_emit(v, name + "."))
+    return out
+
+
+def cmd_config(args):
+    if args.path:
+        print(CONFIG_PATH)
+        return
+    if args.init:
+        if CONFIG_PATH.exists() and not args.force:
+            sys.exit(f"chitta: {CONFIG_PATH} exists (use --force to overwrite)")
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        body = ("# chitta config. Everything here overrides the defaults in\n"
+                "# chitta/config.py — delete any line to fall back to the default.\n"
+                "# Values shown ARE the current defaults.\n\n")
+        CONFIG_PATH.write_text(body + "\n".join(_emit(DEFAULTS)) + "\n")
+        print(f"wrote {CONFIG_PATH}")
+        return
+    src = CONFIG_PATH if CONFIG_PATH.exists() else None
+    print(f"\n  source: {src or '(defaults only — chitta config --init to create)'}\n")
+    for line in _emit(CONFIG):
+        print("  " + line if line else "")
+    print()
+
+
 def cmd_doctor(args):
     print("\n  chitta doctor\n")
     ok = ollama.alive()
@@ -308,6 +361,7 @@ def main():
     a.add_argument("-t", "--tier", choices=list(TIERS), default=DEFAULT_TIER)
     a.add_argument("--think", action="store_true", help="let it reason before answering")
     a.add_argument("--speak", action="store_true", help="read the answer aloud")
+    a.add_argument("--no-memory", action="store_true", help="answer without smriti")
     a.set_defaults(fn=cmd_ask)
 
     s = sub.add_parser("status", help="what is resident right now")
@@ -355,6 +409,12 @@ def main():
     sp.add_argument("text", nargs="+")
     sp.add_argument("--voice", default=shruti.VOICE)
     sp.set_defaults(fn=cmd_say)
+
+    cf = sub.add_parser("config", help="show or create the config file")
+    cf.add_argument("--init", action="store_true", help="write a full config.toml")
+    cf.add_argument("--path", action="store_true", help="print the config path")
+    cf.add_argument("--force", action="store_true")
+    cf.set_defaults(fn=cmd_config)
 
     d = sub.add_parser("doctor", help="check the RAM-critical settings")
     d.set_defaults(fn=cmd_doctor)

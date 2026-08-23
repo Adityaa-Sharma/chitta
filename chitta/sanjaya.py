@@ -19,13 +19,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import smriti
+from .config import CONFIG
 
-CLAUDE_SESSIONS = Path.home() / ".claude" / "projects"
+
 
 
 # ---------- claude code sessions ----------
 
-def claude_sessions(root=CLAUDE_SESSIONS, min_chars=40):
+def claude_sessions(root=None, min_chars=None):
     """One episode per session, not per message.
 
     Extraction costs ~4s a call, so 50 messages would be 3 minutes of the
@@ -33,7 +34,11 @@ def claude_sessions(root=CLAUDE_SESSIONS, min_chars=40):
     Only the human's own words - assistant text would teach it my habits,
     not his.
     """
-    for f in sorted(glob.glob(str(Path(root) / "*" / "*.jsonl"))):
+    c = CONFIG["ingest"]["claude"]
+    root = Path(root or c["path"]).expanduser()
+    min_chars = c["min_session_chars"] if min_chars is None else min_chars
+    for f in sorted(glob.glob(str(root / "*" / "*.jsonl"))):
+        cfg = c
         turns, ts, cwd = [], None, None
         for line in open(f, errors="replace"):
             try:
@@ -49,7 +54,8 @@ def claude_sessions(root=CLAUDE_SESSIONS, min_chars=40):
                 continue
             c = c.strip()
             # command output and pasted blobs are noise, not intent
-            if len(c) < 12 or c.startswith(("<", "/", "!")) or len(c) > 4000:
+            if (len(c) < cfg["min_turn_chars"] or len(c) > cfg["max_turn_chars"]
+                    or c.startswith(tuple(cfg["skip_prefixes"]))):
                 continue
             turns.append(c)
             ts = ts or o.get("timestamp")
@@ -63,12 +69,13 @@ def claude_sessions(root=CLAUDE_SESSIONS, min_chars=40):
 
 # ---------- gmail over imap ----------
 
-def _keychain(service="chitta-gmail"):
+def _keychain(service=None):
     """Read the address and app password the user stored themselves.
 
     chitta never sees a password in the clear and never writes one - the
     user runs `security add-generic-password` once, macOS holds it.
     """
+    service = service or CONFIG["ingest"]["gmail"]["keychain_service"]
     meta = subprocess.run(["security", "find-generic-password", "-s", service],
                           capture_output=True, text=True)
     if meta.returncode:
@@ -88,7 +95,8 @@ def _keychain(service="chitta-gmail"):
     return addr, pw.stdout.strip()
 
 
-def _body(msg, limit=1500):
+def _body(msg, limit=None):
+    limit = limit or CONFIG["ingest"]["gmail"]["body_chars"]
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == "text/plain":
@@ -103,10 +111,14 @@ def _body(msg, limit=1500):
         return ""
 
 
-def gmail(days=7, limit=40, mailbox="INBOX"):
+def gmail(days=None, limit=None, mailbox=None):
+    g = CONFIG["ingest"]["gmail"]
+    days = g["days"] if days is None else days
+    limit = g["limit"] if limit is None else limit
+    mailbox = mailbox or g["mailbox"]
     addr, pw = _keychain()
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%d-%b-%Y")
-    M = imaplib.IMAP4_SSL("imap.gmail.com")
+    M = imaplib.IMAP4_SSL(g["host"])
     try:
         M.login(addr, pw)
         M.select(mailbox, readonly=True)      # readonly: never mark anything seen
@@ -137,7 +149,7 @@ def gmail(days=7, limit=40, mailbox="INBOX"):
 
 # ---------- driver ----------
 
-def ingest(con, episodes, tier="work", digest=False, on_episode=None):
+def ingest(con, episodes, tier=None, digest=False, on_episode=None):
     """Store episodes, then extract claims.
 
     digest=True extracts once from a summary of everything rather than once
