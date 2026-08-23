@@ -4,8 +4,7 @@
   <key>Label</key><string>com.chitta.ollama</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Applications/Ollama.app/Contents/Resources/ollama</string>
-    <string>serve</string>
+    <string>/Users/aditya/chitta/ops/ollama-serve.sh</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>OLLAMA_NUM_PARALLEL</key><string>1</string>

@@ -39,8 +39,9 @@ The launchd agent replaces Ollama.app's server, so the GUI app need not run at a
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.chitta.ollama.plist
     uv tool install --editable .
 
-Then turn off Ollama in System Settings → General → Login Items,
-or it will race the agent for port 11434 on next boot.
+The agent runs `ops/ollama-serve.sh`, which evicts Ollama.app and its server
+before binding :11434 — so the GUI app can stay a login item and lose the race
+anyway. No System Settings toggle needed.
 
 ## Use
 
