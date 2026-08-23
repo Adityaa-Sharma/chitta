@@ -108,11 +108,38 @@ def cmd_unload(args):
 
 
 def cmd_ui(args):
-    """Serve the dashboard on the one origin ollama trusts (see OLLAMA_ORIGINS)."""
-    import functools, http.server, socketserver
+    """Serve the dashboard on the one origin ollama trusts (see OLLAMA_ORIGINS).
+
+    Static files plus one JSON route, because smriti lives in a sqlite file the
+    browser cannot open. ~15 lines beats standing up a second service.
+    """
+    import functools, http.server, json as _json, socketserver
     d = Path(__file__).resolve().parent / "ui"
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                                directory=str(d))
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?")[0] != "/api/smriti":
+                return super().do_GET()
+            try:
+                con = smriti.connect()
+                body = _json.dumps({
+                    "stats": smriti.stats(con),
+                    "claims": [dict(r) for r in smriti.recall(con, limit=12)],
+                    "contradictions": [dict(r) for r in smriti.contradictions(con, limit=6)],
+                }).encode()
+                code = 200
+            except Exception as e:
+                body, code = _json.dumps({"error": str(e)}).encode(), 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass  # a polling dashboard would otherwise spam the terminal
+
+    handler = functools.partial(Handler, directory=str(d))
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("127.0.0.1", UI_PORT), handler) as srv:
         url = f"http://127.0.0.1:{UI_PORT}/index.html"

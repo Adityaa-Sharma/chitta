@@ -7,39 +7,81 @@
 <style>
 :root{
   --bg:#0d0f12; --panel:#14171c; --line:#232830; --fg:#e6e9ef; --dim:#8b93a3;
-  --accent:#7cc4ff; --warm:#ffb86b; --good:#7ee787; --bad:#ff7b72; --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --accent:#7cc4ff; --warm:#ffb86b; --good:#7ee787; --bad:#ff7b72;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  /* from the motion skill — the built-in CSS easings are too weak for UI */
+  --ease-out:cubic-bezier(0.23,1,0.32,1);
 }
 @media (prefers-color-scheme:light){
   :root{--bg:#fbfbfd;--panel:#fff;--line:#e3e6ec;--fg:#14171c;--dim:#6b7280;--accent:#0969da;}
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);padding:28px;max-width:1080px;margin:0 auto}
+body{margin:0 auto;background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);
+     padding:28px;max-width:1080px}
 h1{font-size:20px;margin:0;letter-spacing:.14em;font-weight:500}
 h1 small{color:var(--dim);letter-spacing:0;font-size:12px;margin-left:10px}
-header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
-.label{color:var(--dim);font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px}
+header{display:flex;align-items:baseline;justify-content:space-between;
+       margin-bottom:22px;flex-wrap:wrap;gap:10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+       padding:16px;margin-bottom:16px}
+.label{color:var(--dim);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+       margin-bottom:12px}
+.big{font-size:30px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+
+/* gauge: scaleX, never width — width triggers layout + paint, transform does not */
 .gauge{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:10px 0 6px}
-.gauge>i{display:block;height:100%;background:linear-gradient(90deg,var(--good),var(--warm));transition:width .4s}
-.big{font-size:30px;font-weight:600;letter-spacing:-.02em}
-.row{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.gauge>i{display:block;height:100%;width:100%;transform:scaleX(0);transform-origin:left center;
+         background:linear-gradient(90deg,var(--good),var(--warm));
+         transition:transform 250ms var(--ease-out)}
+
+.row{display:flex;align-items:center;gap:12px;padding:9px 0;
+     border-bottom:1px solid var(--line);
+     transition:opacity 200ms var(--ease-out), transform 200ms var(--ease-out)}
 .row:last-child{border-bottom:0}
+.row.enter,.row.leave{opacity:0;transform:translateY(-4px)}
 .row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tag{font-size:10px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.sz{color:var(--dim);width:78px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums}
+.tag{font-size:10px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);
+     color:var(--dim);white-space:nowrap;
+     transition:color 200ms var(--ease-out),border-color 200ms var(--ease-out)}
 .tag.on{color:var(--good);border-color:var(--good)}
-.sz{color:var(--dim);width:78px;text-align:right;flex-shrink:0}
-button{font:inherit;font-size:12px;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 11px;cursor:pointer}
-button:hover{border-color:var(--accent);color:var(--accent)}
-button.danger:hover{border-color:var(--bad);color:var(--bad)}
+
+button{font:inherit;font-size:12px;background:transparent;color:var(--fg);
+       border:1px solid var(--line);border-radius:6px;padding:4px 11px;cursor:pointer;
+       transition:color 150ms ease,border-color 150ms ease,transform 100ms var(--ease-out)}
+button:active{transform:scale(0.97)}
 button:disabled{opacity:.35;cursor:default}
-input,textarea{font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
+/* touch devices fire a false :hover on tap — gate it */
+@media (hover:hover) and (pointer:fine){
+  button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  button.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
+}
+input,textarea{font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--line);
+               border-radius:6px;padding:8px 10px;width:100%;
+               transition:border-color 150ms ease}
+input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:760px){.grid{grid-template-columns:1fr}}
-pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;color:var(--fg);max-height:280px;overflow:auto}
-.err{color:var(--bad)}
-.dim{color:var(--dim)}
+pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;max-height:280px;overflow:auto}
+.err{color:var(--bad)} .dim{color:var(--dim)}
 .tier{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
 .tier button.sel{border-color:var(--accent);color:var(--accent)}
+.claim{padding:7px 0;border-bottom:1px solid var(--line);
+       transition:opacity 200ms var(--ease-out),transform 200ms var(--ease-out)}
+.claim.enter,.claim.leave{opacity:0;transform:translateY(-4px)}
+.claim:last-child{border-bottom:0}
+.claim b{font-weight:500;color:var(--accent)}
+.was{color:var(--dim);text-decoration:line-through}
+.now{color:var(--good)}
+.statline{display:flex;gap:18px;flex-wrap:wrap;color:var(--dim);font-size:12px;margin-bottom:12px}
+.statline b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+
+/* fewer and gentler, not zero — keep what aids comprehension, drop the movement */
+@media (prefers-reduced-motion:reduce){
+  *{transition-duration:120ms!important;animation-duration:120ms!important}
+  .row.enter,.row.leave,.claim.enter,.claim.leave{transform:none}
+  button:active{transform:none}
+}
 </style>
 </head>
 <body>
@@ -51,7 +93,7 @@ pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;color:var(--fg);m
 <div class="panel">
   <div class="label">resident in memory</div>
   <div class="big" id="ramTotal">—</div>
-  <div class="gauge"><i id="ramBar" style="width:0%"></i></div>
+  <div class="gauge"><i id="ramBar"></i></div>
   <div class="dim" id="ramNote">budget 6 GB &middot; idle target 1.3 GB</div>
   <div id="loaded" style="margin-top:12px"></div>
 </div>
@@ -80,6 +122,16 @@ pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;color:var(--fg);m
   </div>
 </div>
 
+<div class="panel">
+  <div class="label">smriti &middot; what it remembers</div>
+  <div class="statline" id="smStats"><span class="dim">loading…</span></div>
+  <div id="claims"></div>
+  <div id="contraWrap" style="display:none">
+    <div class="label" style="margin:18px 0 8px">where your beliefs changed</div>
+    <div id="contra"></div>
+  </div>
+</div>
+
 <script>
 const API = "http://127.0.0.1:11434";
 const BUDGET = 6 * 1024 ** 3;
@@ -91,108 +143,182 @@ const TIERS = {
 let tier = "work", ctrl = null;
 
 const $ = s => document.querySelector(s);
-const human = n => { n = +n||0; for (const u of ["B","KB","MB","GB"]) { if (n<1024) return (u==="B"||u==="KB"?n.toFixed(0):n.toFixed(1))+" "+u; n/=1024; } return n.toFixed(1)+" TB"; };
-const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const human = n => { n = +n||0; for (const u of ["B","KB","MB","GB"]) {
+  if (n<1024) return (u==="B"||u==="KB"?n.toFixed(0):n.toFixed(1))+" "+u; n/=1024; }
+  return n.toFixed(1)+" TB"; };
 
-async function api(p, opt) { const r = await fetch(API+p, opt); if (!r.ok) throw new Error(r.status+" "+await r.text()); return r; }
+async function api(p, opt){ const r = await fetch(API+p, opt);
+  if(!r.ok) throw new Error(r.status+" "+await r.text()); return r; }
 
-async function refresh() {
-  try {
+/* Keyed reconciliation. The old build rewrote innerHTML every 2.5s, which
+   destroyed every node — no transition can survive that, and it flickered.
+   Here nodes persist; only text and classes change. */
+function sync(container, items, keyOf, build, update, cls="row"){
+  const map = container._rows ||= new Map();
+  const seen = new Set();
+  let structural = false;
+  items.forEach((it, i) => {
+    const k = keyOf(it); seen.add(k);
+    let el = map.get(k);
+    if (!el){
+      el = build(it); el.className = cls + " enter";
+      container.appendChild(el); map.set(k, el); structural = true;
+      el.style.transitionDelay = (Math.min(i,6) * 40) + "ms";   // 40ms stagger, capped
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        el.classList.remove("enter");
+        setTimeout(() => { el.style.transitionDelay = ""; }, 320);
+      }));
+    }
+    update(el, it);
+  });
+  for (const [k, el] of [...map]){
+    if (seen.has(k)) continue;
+    map.delete(k); structural = true;
+    el.classList.add("leave");
+    el.addEventListener("transitionend", () => el.remove(), {once:true});
+    setTimeout(() => el.remove(), 400);          // fallback if transitionend never fires
+  }
+  // only reflow order when the set actually changed — moving nodes restarts transitions
+  if (structural) items.forEach(it => { const el = map.get(keyOf(it)); if (el) container.appendChild(el); });
+}
+
+function rowEl(){ const d = document.createElement("div");
+  d.innerHTML = `<span class="nm"></span><span class="tag"></span>`
+              + `<span class="sz"></span><span class="btns"></span>`;
+  return d; }
+
+async function refresh(){
+  try{
     const [ps, tags] = await Promise.all([
-      api("/api/ps").then(r=>r.json()),
-      api("/api/tags").then(r=>r.json()),
-    ]);
+      api("/api/ps").then(r=>r.json()), api("/api/tags").then(r=>r.json())]);
     $("#conn").textContent = "connected"; $("#conn").className = "tag on";
 
     const live = ps.models || [];
     const total = live.reduce((a,m)=>a+(m.size_vram||m.size||0),0);
     $("#ramTotal").textContent = live.length ? human(total) : "0 B";
-    $("#ramBar").style.width = Math.min(100, total/BUDGET*100) + "%";
+    $("#ramBar").style.transform = `scaleX(${Math.min(1, total/BUDGET)})`;
     $("#ramNote").textContent = live.length
       ? `${live.length} model(s) resident · budget ${human(BUDGET)}`
       : "nothing resident — the daemon costs you nothing right now";
 
-    $("#loaded").innerHTML = live.length ? live.map(m=>`
-      <div class="row">
-        <span class="nm">${esc(m.name)}</span>
-        <span class="tag on">until ${(m.expires_at||"").slice(11,16)}</span>
-        <span class="sz">${human(m.size_vram||m.size)}</span>
-        <button onclick="unload('${esc(m.name)}')">evict</button>
-      </div>`).join("") : "";
+    sync($("#loaded"), live, m=>m.name, rowEl, (el,m)=>{
+      el.querySelector(".nm").textContent = m.name;
+      const t = el.querySelector(".tag");
+      t.textContent = "until " + (m.expires_at||"").slice(11,16); t.className = "tag on";
+      el.querySelector(".sz").textContent = human(m.size_vram||m.size);
+      const b = el.querySelector(".btns");
+      if(!b.firstChild){ const x = document.createElement("button");
+        x.textContent = "evict"; x.onclick = ()=>unload(m.name); b.appendChild(x); }
+    });
 
-    const disk = (tags.models||[]).sort((a,b)=>(b.size||0)-(a.size||0));
     const liveNames = new Set(live.map(m=>m.name));
-    $("#models").innerHTML = disk.length ? disk.map(m=>{
+    const disk = (tags.models||[]).sort((a,b)=>(b.size||0)-(a.size||0));
+    $("#models")._empty?.remove();
+    if(!disk.length && !$("#models")._rows?.size)
+      $("#models").innerHTML = `<span class="dim">no models pulled yet</span>`;
+    else sync($("#models"), disk, m=>m.name, rowEl, (el,m)=>{
       const d = m.details||{}, on = liveNames.has(m.name);
-      return `<div class="row">
-        <span class="nm">${esc(m.name)}</span>
-        <span class="tag ${on?"on":""}">${esc(d.parameter_size||"?")} · ${esc(d.quantization_level||"?")}</span>
-        <span class="sz">${human(m.size)}</span>
-        <button onclick="${on?`unload('${esc(m.name)}')`:`warm('${esc(m.name)}')`}">${on?"evict":"warm"}</button>
-        <button class="danger" onclick="del('${esc(m.name)}')">rm</button>
-      </div>`;
-    }).join("") : `<span class="dim">no models pulled yet</span>`;
-  } catch (e) {
+      el.querySelector(".nm").textContent = m.name;
+      const t = el.querySelector(".tag");
+      t.textContent = `${d.parameter_size||"?"} · ${d.quantization_level||"?"}`;
+      t.className = "tag" + (on ? " on" : "");
+      el.querySelector(".sz").textContent = human(m.size);
+      const b = el.querySelector(".btns");
+      if(!b.firstChild){
+        const w = document.createElement("button"), r = document.createElement("button");
+        r.textContent = "rm"; r.className = "danger"; r.onclick = ()=>del(m.name);
+        b.append(w, document.createTextNode(" "), r); b._warm = w;
+      }
+      b._warm.textContent = on ? "evict" : "warm";
+      b._warm.onclick = on ? ()=>unload(m.name) : ()=>warm(m.name);
+    });
+  }catch(e){
     $("#conn").textContent = "no connection"; $("#conn").className = "tag";
     $("#models").innerHTML = `<span class="err">cannot reach ollama at ${API}<br>
-      if it is running, this is CORS — the launchd agent sets OLLAMA_ORIGINS.<br>
-      run: bash ops/install-ollama-agent.sh</span>`;
+      if it is running this is CORS — OLLAMA_ORIGINS must allow this page's origin.</span>`;
   }
 }
 
-async function unload(n){ await api("/api/generate",{method:"POST",body:JSON.stringify({model:n,keep_alive:0})}); refresh(); }
-async function warm(n){ const t=Object.values(TIERS).find(t=>t.model===n); await api("/api/generate",{method:"POST",body:JSON.stringify({model:n,keep_alive:t?t.keep_alive:"5m"})}); refresh(); }
-async function del(n){ if(!confirm("delete "+n+" from disk?"))return; await api("/api/delete",{method:"DELETE",body:JSON.stringify({model:n})}); refresh(); }
+async function refreshSmriti(){
+  try{
+    const d = await (await fetch("/api/smriti")).json();
+    if(d.error) throw new Error(d.error);
+    const s = d.stats;
+    $("#smStats").innerHTML =
+      `<span><b>${s.claims_live}</b> live claims</span>`+
+      `<span><b>${s.subjects}</b> subjects</span>`+
+      `<span><b>${s.superseded}</b> superseded</span>`+
+      `<span><b>${s.episodes}</b> episodes</span>`;
+    sync($("#claims"), d.claims, c=>c.id, ()=>document.createElement("div"),
+      (el,c)=>{ el.innerHTML = `<b>${c.subject}</b> · ${c.predicate} · ${c.object}`; }, "claim");
+    $("#contraWrap").style.display = d.contradictions.length ? "" : "none";
+    sync($("#contra"), d.contradictions, c=>c.subject+"|"+c.predicate+"|"+c.changed_at,
+      ()=>document.createElement("div"),
+      (el,c)=>{ el.innerHTML = `<b>${c.subject}</b> · ${c.predicate}<br>`+
+        `<span class="was">${c.was}</span> → <span class="now">${c.now_is}</span>`; }, "claim");
+  }catch(e){ $("#smStats").innerHTML = `<span class="dim">smriti unavailable — ${e.message}</span>`; }
+}
+
+async function unload(n){ await api("/api/generate",{method:"POST",
+  body:JSON.stringify({model:n,keep_alive:0})}); refresh(); }
+async function warm(n){ const t=Object.values(TIERS).find(t=>t.model===n);
+  await api("/api/generate",{method:"POST",
+  body:JSON.stringify({model:n,keep_alive:t?t.keep_alive:"5m"})}); refresh(); }
+async function del(n){ if(!confirm("delete "+n+" from disk?"))return;
+  await api("/api/delete",{method:"DELETE",body:JSON.stringify({model:n})}); refresh(); }
 
 $("#pullBtn").onclick = async () => {
-  const name = $("#pullName").value.trim(); if (!name) return;
+  const name = $("#pullName").value.trim(); if(!name) return;
   const out = $("#pullOut"); out.textContent = "pulling "+name+"…"; $("#pullBtn").disabled = true;
-  try {
+  try{
     const r = await api("/api/pull",{method:"POST",body:JSON.stringify({model:name})});
     const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "";
     for(;;){ const {done,value} = await rd.read(); if(done) break;
       buf += dec.decode(value,{stream:true});
       const lines = buf.split("\n"); buf = lines.pop();
-      for (const l of lines) { if(!l.trim()) continue; const o = JSON.parse(l);
-        out.textContent = o.total ? `${o.status} — ${human(o.completed||0)} / ${human(o.total)}` : (o.status||""); }
-    }
+      for(const l of lines){ if(!l.trim()) continue; const o = JSON.parse(l);
+        out.textContent = o.total ? `${o.status} — ${human(o.completed||0)} / ${human(o.total)}`
+                                  : (o.status||""); } }
     out.textContent = "done."; refresh();
-  } catch(e){ out.innerHTML = `<span class="err">${esc(String(e))}</span>`; }
+  }catch(e){ out.innerHTML = `<span class="err">${e}</span>`; }
   $("#pullBtn").disabled = false;
 };
 
 $("#tiers").innerHTML = Object.entries(TIERS).map(([k,v])=>
   `<button data-t="${k}" class="${k===tier?"sel":""}">${k} <span class="dim">${v.model}</span></button>`).join("");
 $("#tiers").onclick = e => { const b = e.target.closest("button"); if(!b) return;
-  tier = b.dataset.t; [...$("#tiers").children].forEach(x=>x.classList.toggle("sel",x.dataset.t===tier)); };
+  tier = b.dataset.t;
+  [...$("#tiers").children].forEach(x=>x.classList.toggle("sel", x.dataset.t===tier)); };
 
 $("#askBtn").onclick = async () => {
   const q = $("#q").value.trim(); if(!q) return;
   const t = TIERS[tier], out = $("#out");
   out.textContent = ""; $("#askBtn").disabled = true; $("#stopBtn").disabled = false;
-  const t0 = performance.now(); let first = null, toks = 0;
+  const t0 = performance.now(); let first = null, n = 0;
   ctrl = new AbortController();
-  try {
+  try{
     const r = await api("/api/chat",{method:"POST",signal:ctrl.signal,body:JSON.stringify({
-      model:t.model, keep_alive:t.keep_alive, options:{num_ctx:t.num_ctx}, think:false, stream:true,
-      messages:[{role:"user",content:q}]})});
+      model:t.model, keep_alive:t.keep_alive, options:{num_ctx:t.num_ctx},
+      think:false, stream:true, messages:[{role:"user",content:q}]})});
     const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "";
     for(;;){ const {done,value} = await rd.read(); if(done) break;
       buf += dec.decode(value,{stream:true});
       const lines = buf.split("\n"); buf = lines.pop();
-      for (const l of lines) { if(!l.trim()) continue; const o = JSON.parse(l);
+      for(const l of lines){ if(!l.trim()) continue; const o = JSON.parse(l);
         const c = o.message && o.message.content;
-        if (c){ if(first===null) first = performance.now()-t0; out.textContent += c; toks++; out.scrollTop = out.scrollHeight; }
-      }
-    }
+        if(c){ if(first===null) first = performance.now()-t0;
+               out.textContent += c; n++; out.scrollTop = out.scrollHeight; } } }
     const el = (performance.now()-t0)/1000;
-    $("#timing").textContent = `${first!==null?(first/1000).toFixed(2):"?"}s to first · ${(toks/el).toFixed(1)} chunk/s`;
-  } catch(e){ if(e.name!=="AbortError") out.innerHTML = `<span class="err">${esc(String(e))}</span>`; }
+    $("#timing").textContent =
+      `${first!==null?(first/1000).toFixed(2):"?"}s to first · ${(n/el).toFixed(1)} chunk/s`;
+  }catch(e){ if(e.name!=="AbortError") out.innerHTML = `<span class="err">${e}</span>`; }
   $("#askBtn").disabled = false; $("#stopBtn").disabled = true; ctrl = null; refresh();
 };
 $("#stopBtn").onclick = () => ctrl && ctrl.abort();
 
-refresh(); setInterval(refresh, 2500);
+refresh(); refreshSmriti();
+setInterval(refresh, 2500);
+setInterval(refreshSmriti, 5000);
 </script>
 </body>
 </html>

@@ -81,6 +81,25 @@ Extraction runs on the local work tier, constrained to a JSON schema, so it
 cannot come back as prose. No graph database: recursive CTEs cover multi-hop
 and stdlib costs nothing at idle. Kuzu if traversal depth ever bites.
 
+## The dashboard
+
+`chitta ui` serves a single static page on 127.0.0.1:7717 — no build step, no
+framework, no container. It talks straight to ollama's REST API, plus one JSON
+route for smriti (which lives in a sqlite file the browser cannot open).
+
+Not Open WebUI: that is ~1 GB resident and always on. This is a file, served
+only while you are looking at it.
+
+`OLLAMA_ORIGINS` is pinned to exactly this origin rather than `*`, so a random
+website you visit cannot reach in and delete your models.
+
+Motion follows Emil Kowalski's rules — transform and opacity only, `scaleX` on
+the gauge rather than `width`, a strong `ease-out`, everything under 300ms,
+`prefers-reduced-motion` and `hover: hover` gating shipped with it. The bigger
+fix was not a curve: the first version rewrote `innerHTML` every 2.5s, which
+destroyed every node and flickered. `sync()` now reconciles by key, so nodes
+persist and only text and classes change. `tests/sync.test.mjs` covers it.
+
 ## Not built yet
 
 Named for what each will do, per the Mahabharata:
