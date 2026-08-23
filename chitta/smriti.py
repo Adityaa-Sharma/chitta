@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS episode(
   ts TEXT NOT NULL,
   text TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS episode_ref
+  ON episode(source, ref) WHERE ref IS NOT NULL;
 CREATE TABLE IF NOT EXISTS claim(
   id INTEGER PRIMARY KEY,
   subject TEXT NOT NULL,
@@ -43,7 +45,8 @@ CREATE TABLE IF NOT EXISTS claim(
   observed_at TEXT NOT NULL,
   superseded_by INTEGER REFERENCES claim(id),
   episode_id INTEGER REFERENCES episode(id),
-  confidence REAL DEFAULT 0.5
+  confidence REAL DEFAULT 0.5,
+  cardinality TEXT NOT NULL DEFAULT 'many'
 );
 CREATE INDEX IF NOT EXISTS claim_sp ON claim(subject, predicate, valid_to);
 """
@@ -60,8 +63,9 @@ EXTRACT_SCHEMA = {
                     "predicate": {"type": "string"},
                     "object": {"type": "string"},
                     "confidence": {"type": "number"},
+                    "cardinality": {"type": "string", "enum": ["one", "many"]},
                 },
-                "required": ["subject", "predicate", "object"],
+                "required": ["subject", "predicate", "object", "cardinality"],
             },
         }
     },
@@ -71,12 +75,22 @@ EXTRACT_SCHEMA = {
 EXTRACT_PROMPT = """Extract durable claims from the text. A claim is
 (subject, predicate, object) - e.g. ("aditya", "is building", "chitta").
 
+One atomic fact per claim. Object under 15 words. Split anything compound
+into separate claims - never pack a whole paragraph into one object.
+
 Keep: goals, commitments, beliefs, preferences, relationships, decisions,
 things that are true for weeks not minutes.
 Drop: pleasantries, one-off events, anything you would not want repeated
 back in six months.
 
 subject and predicate lowercase. Use "aditya" for first person.
+
+cardinality is the important one. "one" means the subject can hold only a
+single value for this predicate at a time, so a new value replaces the old:
+lives in, works at, is married to, currently prefers. "many" means several
+can be true at once: wants, has, knows, is building, is interested in.
+When unsure say "many" - it keeps the old fact instead of destroying it.
+
 Return {"claims": []} rather than inventing anything. Be sparing."""
 
 
@@ -94,16 +108,28 @@ def connect(path=None):
 
 
 def add_episode(con, source, text, ref=None, ts=None):
+    """Returns the new id, or None if this (source, ref) was already ingested.
+
+    Re-running an ingest must be free, otherwise nobody runs it on a schedule.
+    """
     cur = con.execute(
-        "INSERT INTO episode(source, ref, ts, text) VALUES(?,?,?,?)",
+        "INSERT OR IGNORE INTO episode(source, ref, ts, text) VALUES(?,?,?,?)",
         (source, ref, ts or now(), text),
     )
-    return cur.lastrowid
+    con.commit()
+    return cur.lastrowid if cur.rowcount else None
 
 
 def add_claim(con, subject, predicate, obj, episode_id=None, confidence=0.5,
-              valid_from=None, observed_at=None):
-    """Insert, superseding any open claim with the same subject+predicate.
+              valid_from=None, observed_at=None, cardinality="many"):
+    """Insert, superseding the prior value only if the predicate holds one.
+
+    Cardinality matters more than it looks. "aditya prefers X" is single
+    valued, so a new preference genuinely replaces the old one. "aditya
+    wants X" is not - wanting a second thing does not stop you wanting the
+    first. Superseding blindly turned nineteen real claims into fake
+    contradictions on the first real ingest. Default to "many": keeping a
+    stale fact is recoverable, deleting a true one is not.
 
     Returns (claim_id, superseded_id_or_None).
     """
@@ -112,8 +138,9 @@ def add_claim(con, subject, predicate, obj, episode_id=None, confidence=0.5,
     t = observed_at or now()
 
     prior = con.execute(
-        "SELECT id, object FROM claim WHERE subject=? AND predicate=? AND valid_to IS NULL",
-        (s, p),
+        "SELECT id, object FROM claim WHERE subject=? AND predicate=? AND valid_to IS NULL"
+        + ("" if cardinality == "one" else " AND lower(object)=?"),
+        (s, p) if cardinality == "one" else (s, p, o.lower()),
     ).fetchone()
 
     # Same thing said twice is not a contradiction. Leave the original alone
@@ -123,8 +150,8 @@ def add_claim(con, subject, predicate, obj, episode_id=None, confidence=0.5,
 
     cur = con.execute(
         "INSERT INTO claim(subject,predicate,object,valid_from,valid_to,"
-        "observed_at,episode_id,confidence) VALUES(?,?,?,?,NULL,?,?,?)",
-        (s, p, o, valid_from or t, t, episode_id, confidence),
+        "observed_at,episode_id,confidence,cardinality) VALUES(?,?,?,?,NULL,?,?,?,?)",
+        (s, p, o, valid_from or t, t, episode_id, confidence, cardinality),
     )
     new_id = cur.lastrowid
     if prior:
@@ -132,6 +159,42 @@ def add_claim(con, subject, predicate, obj, episode_id=None, confidence=0.5,
                     (t, new_id, prior["id"]))
     con.commit()
     return new_id, (prior["id"] if prior else None)
+
+
+MAX_OBJECT = 200
+
+
+def _clean(claims):
+    """Drop malformed extractions.
+
+    Do NOT enforce this with maxLength in the json schema - the decoder then
+    truncates mid-token and the model spills the next object into the current
+    string, so you get `mac for first time'}, {` as an object value. Bound it
+    here, after decoding.
+
+    Dropping is safe: the episode keeps the raw text, so a better prompt can
+    re-derive the claim later. Claims are derived data, episodes are source.
+    """
+    out, seen = [], set()
+    for c in claims:
+        if not isinstance(c, dict):
+            continue
+        s = str(c.get("subject", "")).strip()
+        p = str(c.get("predicate", "")).strip()
+        o = str(c.get("object", "")).strip()
+        if not (s and p and o):
+            continue
+        if len(o) > MAX_OBJECT or len(p) > 60 or len(s) > 60:
+            continue          # a paragraph, not a claim - failed extraction
+        if "'}," in o or '"},' in o:
+            continue          # decoder spillage
+        k = (s.lower(), p.lower(), o.lower())
+        if k in seen:
+            continue
+        seen.add(k)
+        c["subject"], c["predicate"], c["object"] = s, p, o
+        out.append(c)
+    return out
 
 
 def extract(text, tier="work"):
@@ -142,7 +205,7 @@ def extract(text, tier="work"):
          {"role": "user", "content": text}],
         EXTRACT_SCHEMA, keep_alive=t["keep_alive"], num_ctx=t["num_ctx"],
     )
-    return out.get("claims", [])
+    return _clean(out.get("claims", []))
 
 
 def feed(con, text, source="note", ref=None, tier="work"):
@@ -152,7 +215,8 @@ def feed(con, text, source="note", ref=None, tier="work"):
         if not (c.get("subject") and c.get("predicate") and c.get("object")):
             continue
         cid, old = add_claim(con, c["subject"], c["predicate"], c["object"],
-                             episode_id=ep, confidence=c.get("confidence", 0.5))
+                             episode_id=ep, confidence=c.get("confidence", 0.5),
+                             cardinality=c.get("cardinality", "many"))
         added.append((cid, c))
         if old:
             superseded.append(old)
@@ -196,15 +260,17 @@ def stats(con):
 def _selfcheck():
     """Supersession is the only non-obvious logic here, so it is what we test."""
     con = connect(":memory:")
-    a, old = add_claim(con, "Aditya", "Is Building", "a CLI", confidence=0.9)
+    a, old = add_claim(con, "Aditya", "Is Building", "a CLI", confidence=0.9,
+                       cardinality="one")
     assert old is None
 
     # identical restatement must not fork history
-    b, old = add_claim(con, "aditya", "is building", "a CLI")
+    b, old = add_claim(con, "aditya", "is building", "a CLI", cardinality="one")
     assert b == a and old is None, "restating a claim should be a no-op"
 
     # a real change supersedes
-    c, old = add_claim(con, "aditya", "is building", "a knowledge graph")
+    c, old = add_claim(con, "aditya", "is building", "a knowledge graph",
+                       cardinality="one")
     assert old == a and c != a
 
     live = recall(con)
@@ -220,9 +286,30 @@ def _selfcheck():
     assert ct[0]["was"] == "a CLI" and ct[0]["now_is"] == "a knowledge graph"
 
     # unrelated predicate is untouched
-    add_claim(con, "aditya", "prefers", "minimal dependencies")
+    add_claim(con, "aditya", "prefers", "minimal dependencies", cardinality="one")
     assert len(recall(con)) == 2
-    assert stats(con)["superseded"] == 1
+
+    # multi-valued predicates must accumulate, never evict. This is the bug
+    # that made 19 fake contradictions out of one ingest.
+    add_claim(con, "aditya", "wants", "local models")
+    add_claim(con, "aditya", "wants", "a knowledge graph")
+    add_claim(con, "aditya", "wants", "voice input")
+    wants = [r for r in recall(con) if r["predicate"] == "wants"]
+    assert len(wants) == 3, f"multi-valued predicate evicted: {len(wants)} of 3 survived"
+    # ...but an exact repeat is still a no-op
+    _, old = add_claim(con, "aditya", "wants", "voice input")
+    assert old is None and len([r for r in recall(con) if r["predicate"] == "wants"]) == 3
+    assert stats(con)["superseded"] == 1, "only the single-valued change superseded"
+    # _clean guards the things the decoder actually got wrong
+    bad = _clean([
+        {"subject": "a", "predicate": "b", "object": "x" * 500},      # paragraph
+        {"subject": "a", "predicate": "b", "object": "mac'}, {"},     # spillage
+        {"subject": "", "predicate": "b", "object": "c"},             # empty
+        {"subject": "a", "predicate": "likes", "object": "tea"},      # good
+        {"subject": "A", "predicate": "Likes", "object": "Tea"},      # dup
+    ])
+    assert len(bad) == 1 and bad[0]["object"] == "tea", bad
+
     print("smriti selfcheck ok")
 
 

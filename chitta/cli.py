@@ -6,7 +6,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from . import __version__, ollama, smriti
+from . import __version__, ollama, sanjaya, shruti, smriti
 from .config import DEFAULT_TIER, EMBED, TIERS, UI_PORT
 
 PERSONA = (
@@ -38,6 +38,7 @@ def cmd_ask(args):
     tier = TIERS[args.tier]
     msgs = [{"role": "system", "content": PERSONA},
             {"role": "user", "content": " ".join(args.prompt)}]
+    buf = []
     try:
         for chunk in ollama.chat(tier["model"], msgs,
                                  keep_alive=tier["keep_alive"],
@@ -45,9 +46,12 @@ def cmd_ask(args):
                                  think=args.think):
             sys.stdout.write(chunk)
             sys.stdout.flush()
+            buf.append(chunk)
     except KeyboardInterrupt:
         pass
     print()
+    if args.speak:
+        shruti.speak("".join(buf))
 
 
 def cmd_status(args):
@@ -197,6 +201,68 @@ def cmd_contradictions(args):
         print(f"    now  {r['now_is']}   (changed {r['changed_at'][:10]})\n")
 
 
+def _report(added, superseded, stored=None):
+    if stored is not None:
+        print(f"  {len(stored)} new episode(s)")
+    seen = set()
+    for c in added:
+        k = (c["subject"], c["predicate"])
+        if k in seen:
+            continue
+        seen.add(k)
+        print(f"  + {c['subject']} · {c['predicate']} · {c['object']}")
+    if not added:
+        print("  nothing durable found")
+    if superseded:
+        print(f"\n  {len(superseded)} earlier belief(s) superseded — chitta contradictions")
+
+
+def cmd_ingest(args):
+    need_server()
+    con = smriti.connect()
+    if args.what == "claude":
+        eps = sanjaya.claude_sessions()
+        digest = False
+    else:
+        try:
+            eps = sanjaya.gmail(days=args.days, limit=args.limit)
+        except RuntimeError as e:
+            sys.exit(f"chitta: {e}")
+        digest = True
+    print(f"ingesting {args.what}…")
+    try:
+        stored, added, sup = sanjaya.ingest(con, eps, tier=args.tier, digest=digest)
+    except RuntimeError as e:
+        sys.exit(f"chitta: {e}")
+    if not stored:
+        print("  nothing new — already ingested")
+        return
+    _report(added, sup, stored)
+
+
+def cmd_listen(args):
+    """Wispr Flow types into the focused window, so stdin is the microphone."""
+    need_server()
+    if sys.stdin.isatty():
+        print("dictate now (Wispr Flow, or type). ctrl-D when done:\n")
+    text = sys.stdin.read().strip()
+    if not text:
+        sys.exit("chitta: heard nothing")
+    con = smriti.connect()
+    print(f"\nheard {len(text)} chars…")
+    ep, added, sup = smriti.feed(con, text, source="voice", tier=args.tier)
+    _report([c for _, c in added], sup)
+    if args.speak:
+        n = len({(c["subject"], c["predicate"]) for _, c in added})
+        shruti.speak(f"Remembered {n} thing{'s' if n != 1 else ''}." if n
+                     else "Nothing worth keeping in that.")
+
+
+def cmd_say(args):
+    if not shruti.speak(" ".join(args.text), voice=args.voice):
+        sys.exit("chitta: `say` unavailable")
+
+
 def cmd_doctor(args):
     print("\n  chitta doctor\n")
     ok = ollama.alive()
@@ -237,6 +303,7 @@ def main():
     a.add_argument("prompt", nargs="+")
     a.add_argument("-t", "--tier", choices=list(TIERS), default=DEFAULT_TIER)
     a.add_argument("--think", action="store_true", help="let it reason before answering")
+    a.add_argument("--speak", action="store_true", help="read the answer aloud")
     a.set_defaults(fn=cmd_ask)
 
     s = sub.add_parser("status", help="what is resident right now")
@@ -267,6 +334,23 @@ def main():
 
     x = sub.add_parser("contradictions", help="where your beliefs changed")
     x.set_defaults(fn=cmd_contradictions)
+
+    g = sub.add_parser("ingest", help="feed it from what is already on this machine")
+    g.add_argument("what", choices=["claude", "gmail"])
+    g.add_argument("--days", type=int, default=7)
+    g.add_argument("--limit", type=int, default=40)
+    g.add_argument("-t", "--tier", choices=list(TIERS), default="work")
+    g.set_defaults(fn=cmd_ingest)
+
+    l = sub.add_parser("listen", help="dictate (Wispr Flow) or pipe text in")
+    l.add_argument("-t", "--tier", choices=list(TIERS), default="work")
+    l.add_argument("--speak", action="store_true", help="confirm aloud")
+    l.set_defaults(fn=cmd_listen)
+
+    sp = sub.add_parser("say", help="read something aloud")
+    sp.add_argument("text", nargs="+")
+    sp.add_argument("--voice", default=shruti.VOICE)
+    sp.set_defaults(fn=cmd_say)
 
     d = sub.add_parser("doctor", help="check the RAM-critical settings")
     d.set_defaults(fn=cmd_doctor)
