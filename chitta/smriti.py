@@ -246,6 +246,28 @@ def contradictions(con, limit=50):
         "ORDER BY o.valid_to DESC LIMIT ?", (limit,)).fetchall()
 
 
+def graph(con, limit=250):
+    """Nodes and edges for the viewer.
+
+    Subjects and objects are both nodes; a claim is an edge. Superseded
+    claims are included but flagged, because seeing what a belief replaced
+    is the whole reason the history is kept.
+    """
+    rows = con.execute(
+        "SELECT subject, predicate, object, valid_to, cardinality, confidence "
+        "FROM claim ORDER BY observed_at DESC LIMIT ?", (limit,)).fetchall()
+    nodes, edges = {}, []
+    for r in rows:
+        for name, kind in ((r["subject"], "subject"), (r["object"], "object")):
+            n = nodes.setdefault(name, {"id": name, "kind": kind, "deg": 0})
+            n["deg"] += 1
+            if kind == "subject":
+                n["kind"] = "subject"      # being a subject anywhere wins
+        edges.append({"s": r["subject"], "t": r["object"], "label": r["predicate"],
+                      "live": r["valid_to"] is None})
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
 def stats(con):
     q = lambda s: con.execute(s).fetchone()[0]
     return {

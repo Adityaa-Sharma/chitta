@@ -122,15 +122,19 @@ def cmd_ui(args):
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
-            if self.path.split("?")[0] != "/api/smriti":
+            route = self.path.split("?")[0]
+            if route not in ("/api/smriti", "/api/graph"):
                 return super().do_GET()
             try:
                 con = smriti.connect()
-                body = _json.dumps({
-                    "stats": smriti.stats(con),
-                    "claims": [dict(r) for r in smriti.recall(con, limit=12)],
-                    "contradictions": [dict(r) for r in smriti.contradictions(con, limit=6)],
-                }).encode()
+                if route == "/api/graph":
+                    body = _json.dumps(smriti.graph(con)).encode()
+                else:
+                    body = _json.dumps({
+                        "stats": smriti.stats(con),
+                        "claims": [dict(r) for r in smriti.recall(con, limit=12)],
+                        "contradictions": [dict(r) for r in smriti.contradictions(con, limit=6)],
+                    }).encode()
                 code = 200
             except Exception as e:
                 body, code = _json.dumps({"error": str(e)}).encode(), 500
