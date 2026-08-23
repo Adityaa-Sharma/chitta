@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>chitta</title>
+<style>
+:root{
+  --bg:#0d0f12; --panel:#14171c; --line:#232830; --fg:#e6e9ef; --dim:#8b93a3;
+  --accent:#7cc4ff; --warm:#ffb86b; --good:#7ee787; --bad:#ff7b72; --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#fbfbfd;--panel:#fff;--line:#e3e6ec;--fg:#14171c;--dim:#6b7280;--accent:#0969da;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);padding:28px;max-width:1080px;margin:0 auto}
+h1{font-size:20px;margin:0;letter-spacing:.14em;font-weight:500}
+h1 small{color:var(--dim);letter-spacing:0;font-size:12px;margin-left:10px}
+header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.label{color:var(--dim);font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px}
+.gauge{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:10px 0 6px}
+.gauge>i{display:block;height:100%;background:linear-gradient(90deg,var(--good),var(--warm));transition:width .4s}
+.big{font-size:30px;font-weight:600;letter-spacing:-.02em}
+.row{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:10px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.tag.on{color:var(--good);border-color:var(--good)}
+.sz{color:var(--dim);width:78px;text-align:right;flex-shrink:0}
+button{font:inherit;font-size:12px;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 11px;cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.danger:hover{border-color:var(--bad);color:var(--bad)}
+button:disabled{opacity:.35;cursor:default}
+input,textarea{font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;color:var(--fg);max-height:280px;overflow:auto}
+.err{color:var(--bad)}
+.dim{color:var(--dim)}
+.tier{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.tier button.sel{border-color:var(--accent);color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>चित्त <small>chitta &middot; model control</small></h1>
+  <span id="conn" class="tag">connecting…</span>
+</header>
+
+<div class="panel">
+  <div class="label">resident in memory</div>
+  <div class="big" id="ramTotal">—</div>
+  <div class="gauge"><i id="ramBar" style="width:0%"></i></div>
+  <div class="dim" id="ramNote">budget 6 GB &middot; idle target 1.3 GB</div>
+  <div id="loaded" style="margin-top:12px"></div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <div class="label">on disk</div>
+    <div id="models"><span class="dim">loading…</span></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <input id="pullName" placeholder="pull a model, e.g. qwen3:4b" spellcheck="false">
+      <button id="pullBtn">pull</button>
+    </div>
+    <pre id="pullOut" class="dim"></pre>
+  </div>
+
+  <div class="panel">
+    <div class="label">test</div>
+    <div class="tier" id="tiers"></div>
+    <textarea id="q" rows="3" placeholder="ask something…" spellcheck="false"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button id="askBtn">ask</button>
+      <button id="stopBtn" disabled>stop</button>
+      <span class="dim" id="timing" style="align-self:center"></span>
+    </div>
+    <pre id="out"></pre>
+  </div>
+</div>
+
+<script>
+const API = "http://127.0.0.1:11434";
+const BUDGET = 6 * 1024 ** 3;
+const TIERS = {
+  reflex: {model:"qwen3:1.7b",  keep_alive:"30m", num_ctx:4096},
+  work:   {model:"qwen3:8b",    keep_alive:"5m",  num_ctx:8192},
+  heavy:  {model:"gpt-oss:20b", keep_alive:"60s", num_ctx:8192},
+};
+let tier = "work", ctrl = null;
+
+const $ = s => document.querySelector(s);
+const human = n => { n = +n||0; for (const u of ["B","KB","MB","GB"]) { if (n<1024) return (u==="B"||u==="KB"?n.toFixed(0):n.toFixed(1))+" "+u; n/=1024; } return n.toFixed(1)+" TB"; };
+const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+async function api(p, opt) { const r = await fetch(API+p, opt); if (!r.ok) throw new Error(r.status+" "+await r.text()); return r; }
+
+async function refresh() {
+  try {
+    const [ps, tags] = await Promise.all([
+      api("/api/ps").then(r=>r.json()),
+      api("/api/tags").then(r=>r.json()),
+    ]);
+    $("#conn").textContent = "connected"; $("#conn").className = "tag on";
+
+    const live = ps.models || [];
+    const total = live.reduce((a,m)=>a+(m.size_vram||m.size||0),0);
+    $("#ramTotal").textContent = live.length ? human(total) : "0 B";
+    $("#ramBar").style.width = Math.min(100, total/BUDGET*100) + "%";
+    $("#ramNote").textContent = live.length
+      ? `${live.length} model(s) resident · budget ${human(BUDGET)}`
+      : "nothing resident — the daemon costs you nothing right now";
+
+    $("#loaded").innerHTML = live.length ? live.map(m=>`
+      <div class="row">
+        <span class="nm">${esc(m.name)}</span>
+        <span class="tag on">until ${(m.expires_at||"").slice(11,16)}</span>
+        <span class="sz">${human(m.size_vram||m.size)}</span>
+        <button onclick="unload('${esc(m.name)}')">evict</button>
+      </div>`).join("") : "";
+
+    const disk = (tags.models||[]).sort((a,b)=>(b.size||0)-(a.size||0));
+    const liveNames = new Set(live.map(m=>m.name));
+    $("#models").innerHTML = disk.length ? disk.map(m=>{
+      const d = m.details||{}, on = liveNames.has(m.name);
+      return `<div class="row">
+        <span class="nm">${esc(m.name)}</span>
+        <span class="tag ${on?"on":""}">${esc(d.parameter_size||"?")} · ${esc(d.quantization_level||"?")}</span>
+        <span class="sz">${human(m.size)}</span>
+        <button onclick="${on?`unload('${esc(m.name)}')`:`warm('${esc(m.name)}')`}">${on?"evict":"warm"}</button>
+        <button class="danger" onclick="del('${esc(m.name)}')">rm</button>
+      </div>`;
+    }).join("") : `<span class="dim">no models pulled yet</span>`;
+  } catch (e) {
+    $("#conn").textContent = "no connection"; $("#conn").className = "tag";
+    $("#models").innerHTML = `<span class="err">cannot reach ollama at ${API}<br>
+      if it is running, this is CORS — the launchd agent sets OLLAMA_ORIGINS.<br>
+      run: bash ops/install-ollama-agent.sh</span>`;
+  }
+}
+
+async function unload(n){ await api("/api/generate",{method:"POST",body:JSON.stringify({model:n,keep_alive:0})}); refresh(); }
+async function warm(n){ const t=Object.values(TIERS).find(t=>t.model===n); await api("/api/generate",{method:"POST",body:JSON.stringify({model:n,keep_alive:t?t.keep_alive:"5m"})}); refresh(); }
+async function del(n){ if(!confirm("delete "+n+" from disk?"))return; await api("/api/delete",{method:"DELETE",body:JSON.stringify({model:n})}); refresh(); }
+
+$("#pullBtn").onclick = async () => {
+  const name = $("#pullName").value.trim(); if (!name) return;
+  const out = $("#pullOut"); out.textContent = "pulling "+name+"…"; $("#pullBtn").disabled = true;
+  try {
+    const r = await api("/api/pull",{method:"POST",body:JSON.stringify({model:name})});
+    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for(;;){ const {done,value} = await rd.read(); if(done) break;
+      buf += dec.decode(value,{stream:true});
+      const lines = buf.split("\n"); buf = lines.pop();
+      for (const l of lines) { if(!l.trim()) continue; const o = JSON.parse(l);
+        out.textContent = o.total ? `${o.status} — ${human(o.completed||0)} / ${human(o.total)}` : (o.status||""); }
+    }
+    out.textContent = "done."; refresh();
+  } catch(e){ out.innerHTML = `<span class="err">${esc(String(e))}</span>`; }
+  $("#pullBtn").disabled = false;
+};
+
+$("#tiers").innerHTML = Object.entries(TIERS).map(([k,v])=>
+  `<button data-t="${k}" class="${k===tier?"sel":""}">${k} <span class="dim">${v.model}</span></button>`).join("");
+$("#tiers").onclick = e => { const b = e.target.closest("button"); if(!b) return;
+  tier = b.dataset.t; [...$("#tiers").children].forEach(x=>x.classList.toggle("sel",x.dataset.t===tier)); };
+
+$("#askBtn").onclick = async () => {
+  const q = $("#q").value.trim(); if(!q) return;
+  const t = TIERS[tier], out = $("#out");
+  out.textContent = ""; $("#askBtn").disabled = true; $("#stopBtn").disabled = false;
+  const t0 = performance.now(); let first = null, toks = 0;
+  ctrl = new AbortController();
+  try {
+    const r = await api("/api/chat",{method:"POST",signal:ctrl.signal,body:JSON.stringify({
+      model:t.model, keep_alive:t.keep_alive, options:{num_ctx:t.num_ctx}, think:false, stream:true,
+      messages:[{role:"user",content:q}]})});
+    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for(;;){ const {done,value} = await rd.read(); if(done) break;
+      buf += dec.decode(value,{stream:true});
+      const lines = buf.split("\n"); buf = lines.pop();
+      for (const l of lines) { if(!l.trim()) continue; const o = JSON.parse(l);
+        const c = o.message && o.message.content;
+        if (c){ if(first===null) first = performance.now()-t0; out.textContent += c; toks++; out.scrollTop = out.scrollHeight; }
+      }
+    }
+    const el = (performance.now()-t0)/1000;
+    $("#timing").textContent = `${first!==null?(first/1000).toFixed(2):"?"}s to first · ${(toks/el).toFixed(1)} chunk/s`;
+  } catch(e){ if(e.name!=="AbortError") out.innerHTML = `<span class="err">${esc(String(e))}</span>`; }
+  $("#askBtn").disabled = false; $("#stopBtn").disabled = true; ctrl = null; refresh();
+};
+$("#stopBtn").onclick = () => ctrl && ctrl.abort();
+
+refresh(); setInterval(refresh, 2500);
+</script>
+</body>
+</html>

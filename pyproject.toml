@@ -1,0 +1,19 @@
+[project]
+name = "chitta"
+version = "0.1.0"
+description = "A local-first, RAM-optimised personal intelligence. Chitta holds the impressions; the rest is plumbing."
+requires-python = ">=3.11"
+dependencies = []          # core is stdlib-only, on purpose: instant CLI startup
+
+[project.optional-dependencies]
+brain = ["graphiti-core", "kuzu"]   # phase 3, installed separately
+
+[project.scripts]
+chitta = "chitta.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["chitta"]
